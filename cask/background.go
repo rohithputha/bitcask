@@ -1,35 +1,32 @@
 package cask
 
 import (
-	"bitcask/diskops"
-	"bitcask/memops"
 	"bitcask/data"
 	"encoding/json"
 
-	"os"
 	"log"
+	"os"
 )
 
-const filePath = "/Users/rohith/Desktop/Desktop - Rohith’s MacBook Air/incubation/bitcask/dbfiles"
+//const filePath = "/Users/rohith/Desktop/Desktop - Rohith’s MacBook Air/incubation/bitcask/dbfiles"
 
 type dmgr struct {
-	filemgr *diskops.FileMgr
-	diskMgr *diskops.DiskMgr
-	keyDir *memops.KeyDir
+	filemgr *FileMgr
+	diskMgr *DiskMgr
+	keyDir  *KeyDir
 	afExSig chan string
 }
 
-func initDmgr(filemgr *diskops.FileMgr,diskMgr *diskops.DiskMgr, keyDir *memops.KeyDir, afExSig chan string) *dmgr {
+func initDmgr(filemgr *FileMgr, diskMgr *DiskMgr, keyDir *KeyDir, afExSig chan string) *dmgr {
 	dmgr := &dmgr{
 		filemgr: filemgr,
 		diskMgr: diskMgr,
-		keyDir: keyDir,
+		keyDir:  keyDir,
 		afExSig: afExSig,
 	}
 	go dmgr.manage()
 	return dmgr
 }
-
 
 func totalFilesCheck() int {
 	files, err := os.ReadDir(filePath)
@@ -47,13 +44,12 @@ func (d *dmgr) getByteString(key interface{}) string {
 	return string(b)
 }
 
-
-func (d *dmgr) mergeFiles(completeFiles []*diskops.DbFile) {
+func (d *dmgr) mergeFiles(completeFiles []*DbFile) {
 	ende := data.NewEnde()
-	temp := make(map[string]*memops.BlockAddr)
+	temp := make(map[string]*BlockAddr)
 	tdbFile := d.filemgr.AddNewFile()
 	tFile := tdbFile.GetFile()
-	cFiles := make([]*diskops.DbFile, 0)
+	cFiles := make([]*DbFile, 0)
 	for _, file := range completeFiles {
 		iter := file.NewIterator()
 		for iter.IsNext() {
@@ -65,21 +61,21 @@ func (d *dmgr) mergeFiles(completeFiles []*diskops.DbFile) {
 				continue
 			}
 
-			if  timestamp == d.keyDir.GetBlockAddr(stringKey).Timestamp {
+			if timestamp == d.keyDir.GetBlockAddr(stringKey).Timestamp {
 				tbytes := ende.EncodeData(timestamp, key, value)
-				toffset, err := d.diskMgr.AppendBlockWithFileId(tdbFile.GetId(),tbytes)
+				toffset, err := d.diskMgr.AppendBlockWithFileId(tdbFile.GetId(), tbytes)
 				if err != nil {
-					log.Fatalf("Error appending block to file with offset: %d",toffset)
+					log.Fatalf("Error appending block to file with offset: %d", toffset)
 				}
-				temp[stringKey] = &memops.BlockAddr{Fid: tdbFile.GetId(), Offset: int(toffset), Size: len(tbytes),Timestamp: timestamp}
+				temp[stringKey] = &BlockAddr{Fid: tdbFile.GetId(), Offset: int(toffset), Size: len(tbytes), Timestamp: timestamp}
 			}
 		}
 		cFiles = append(cFiles, file)
 	}
 	tFile.Sync()
-	tdbFile.ReleaseFile()
 
 	d.filemgr.MakeFileComplete(tdbFile.GetId())
+
 	d.keyDir.SetNewBlockAddrMap(temp)
 	for _, file := range cFiles {
 		d.filemgr.DeleteFile(file.GetId())
@@ -93,6 +89,6 @@ func (d *dmgr) manage() {
 		completeFiles := d.filemgr.GetCompleteFiles()
 		if len(completeFiles) >= 5 {
 			d.mergeFiles(completeFiles)
-		}      
+		}
 	}
 }

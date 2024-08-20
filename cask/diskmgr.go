@@ -1,4 +1,4 @@
-package diskops
+package cask
 
 import (
 	"log"
@@ -27,41 +27,44 @@ func NewDiskMgr(fileMgr *FileMgr) *DiskMgr {
 func (d *DiskMgr) ReadBlock(fileName string, offset int, totalBytes int) []byte {
 	dbfile := d.fm.GetFile(fileName)
 	file := dbfile.GetFile()
-	blockBytes := make([]byte, totalBytes)
-	_, err := file.ReadAt(blockBytes, int64(offset))
-	dbfile.ReleaseFile()
-	if err != nil {
-		log.Fatalf("Error reading block from file %s", fileName)
-	}
-	
+	var blockBytes []byte
+	withLocks(func() {
+		blockBytes = make([]byte, totalBytes)
+		_, err := file.ReadAt(blockBytes, int64(offset))
+		if err != nil {
+			log.Fatalf("Error reading block from file %s", fileName)
+		}
+
+	}, fileRWLock(dbfile.id))
 	return blockBytes
 }
 
-func (d *DiskMgr) AppendBlock(block []byte) (fid string, offset int64, err error) {
+func (d *DiskMgr) AppendBlock(block []byte) (fid string, offset int64, fileWriteErr error) {
 	dbfile := d.fm.GetActiveFile()
 	if dbfile == nil {
 		dbfile = d.fm.AddNewFile()
 		d.fm.MakeFileActive(dbfile.id)
 	}
 	file := dbfile.GetFile()
-	defer dbfile.ReleaseFile()
+	offset = int64(-1)
+	fid = dbfile.id
+	withLocks(func() {
+		fileInfo, fileWriteErr := file.Stat()
+		if fileWriteErr != nil {
+			fid = "-1"
+			offset = -1
+		}
+		offset = fileInfo.Size()
+		_, fileWriteErr = file.Write(block)
+		file.Sync()
+	}, fileRWLock(dbfile.id))
 
-	fileInfo, err := file.Stat()
-	if err != nil {
-		return "-1", -1, err
-	}
-
-	offset = fileInfo.Size()
-	_, err = file.Write(block)
-	file.Sync()
-	
-	return dbfile.id,offset, err
+	return fid, offset, fileWriteErr
 }
 
 func (d *DiskMgr) AppendBlockWithFileId(fid string, block []byte) (offset int64, err error) {
 	dbfile := d.fm.GetFile(fid)
 	file := dbfile.GetFile()
-	defer dbfile.ReleaseFile()
 
 	fileInfo, err := file.Stat()
 	if err != nil {
@@ -71,7 +74,7 @@ func (d *DiskMgr) AppendBlockWithFileId(fid string, block []byte) (offset int64,
 	offset = fileInfo.Size()
 	_, err = file.Write(block)
 	file.Sync()
-	
+
 	return offset, err
 }
 
