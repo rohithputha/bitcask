@@ -8,8 +8,9 @@ import (
 
 func main() {
 	c := cask.NewCaskDb()
-	go get(c)
-	for i := 0; i < 40; i++ {
+	//go get(c)
+	go put(c)
+	for i := 0; i < 6000; i++ {
 		c.Put("key1", "4366")
 
 		c.Put("key2", "value2")
@@ -19,14 +20,26 @@ func main() {
 		c.Put("key4", "value4")
 
 	}
-	time.Sleep(2 * time.Second)
+	time.Sleep(15 * time.Second)
 	fmt.Println(c.Get("key1"))
 	fmt.Println(c.Get("key3"))
 }
 func get(c *cask.CaskDb) {
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 5000; i++ {
 		fmt.Println("hello")
 		fmt.Println(c.Get("key1"))
 		fmt.Println(c.Get("key3"))
+	}
+}
+func put(c *cask.CaskDb) {
+	for i := 0; i < 5000; i++ {
+		c.Put("key1", "4366")
+
+		c.Put("key2", "value2")
+
+		c.Put("key3", []string{"key3", "Rohith"})
+
+		c.Put("key4", "value4")
+
 	}
 }

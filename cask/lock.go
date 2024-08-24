@@ -8,6 +8,7 @@ var fLock map[string]*sync.RWMutex
 var dirLockOnKeyMap map[string]*sync.RWMutex
 var fMgrLock *sync.RWMutex
 var dirLock *sync.RWMutex
+var mapLock *sync.Mutex
 var once sync.Once
 
 type caskLockConfig struct {
@@ -55,6 +56,7 @@ func withLocks(f func(), options ...func(*caskLockConfig)) {
 	for _, option := range options {
 		option(c)
 	}
+	mapLock.Lock()
 	if c.fileLockFid != "" {
 		if l, ok := fLock[c.fileLockFid]; !ok {
 			fLock[c.fileLockFid] = &sync.RWMutex{}
@@ -75,6 +77,8 @@ func withLocks(f func(), options ...func(*caskLockConfig)) {
 			defer l.RUnlock()
 		}
 	}
+	mapLock.Unlock()
+
 	if c.keyDirLock {
 		dirLock.Lock()
 		defer dirLock.Unlock()
@@ -100,5 +104,6 @@ func initLocks() {
 		fLock = make(map[string]*sync.RWMutex)
 		dirLock = &sync.RWMutex{}
 		fMgrLock = &sync.RWMutex{}
+		mapLock = &sync.Mutex{}
 	})
 }

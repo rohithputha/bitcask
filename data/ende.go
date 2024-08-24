@@ -7,7 +7,6 @@ import (
 )
 
 type Ende struct {
-
 }
 
 func NewEnde() *Ende {
@@ -23,7 +22,6 @@ func (e *Ende) EncodeData(timestamp int64, key interface{}, value interface{}) [
 	keyLengthBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(keyLengthBytes, uint32(len(keyBytes)))
 
-
 	valueLengthBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(valueLengthBytes, uint32(len(valueBytes)))
 
@@ -35,15 +33,15 @@ func (e *Ende) EncodeData(timestamp int64, key interface{}, value interface{}) [
 	}
 
 	finalBytes := append([]byte{s}, keyLengthBytes...)
-    finalBytes = append(finalBytes, valueLengthBytes...)
-    finalBytes = append(finalBytes, keyBytes...)
-    finalBytes = append(finalBytes, valueBytes...)
-    finalBytes = append(finalBytes, timestampBytes...)
+	finalBytes = append(finalBytes, valueLengthBytes...)
+	finalBytes = append(finalBytes, keyBytes...)
+	finalBytes = append(finalBytes, valueBytes...)
+	finalBytes = append(finalBytes, timestampBytes...)
 	return finalBytes
 }
 
 func (e *Ende) DecodeData(data []byte) (int64, interface{}, interface{}) {
-	if data == nil || len(data) <= 0  {
+	if data == nil || len(data) <= 0 {
 		return -1, nil, nil
 	}
 	if data[0] != byte('\r') {
@@ -54,9 +52,9 @@ func (e *Ende) DecodeData(data []byte) (int64, interface{}, interface{}) {
 	keyLength := binary.BigEndian.Uint32(data[1:5])
 	valueLength := binary.BigEndian.Uint32(data[5:9])
 
-	key := data[9:9+keyLength]
-	value := data[9+keyLength:9+keyLength+valueLength]
-	timestamp := binary.BigEndian.Uint64(data[9+keyLength+valueLength:])
+	key := data[9 : 9+keyLength]
+	value := data[9+keyLength : 9+keyLength+valueLength]
+	timestamp := binary.BigEndian.Uint64(data[9+keyLength+valueLength : 17+keyLength+valueLength])
 
 	var keyInterface interface{}
 	var valueInterface interface{}

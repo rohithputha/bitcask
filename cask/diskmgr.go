@@ -34,7 +34,6 @@ func (d *DiskMgr) ReadBlock(fileName string, offset int, totalBytes int) []byte 
 		if err != nil {
 			log.Fatalf("Error reading block from file %s", fileName)
 		}
-
 	}, fileRWLock(dbfile.id))
 	return blockBytes
 }
@@ -45,10 +44,10 @@ func (d *DiskMgr) AppendBlock(block []byte) (fid string, offset int64, fileWrite
 		dbfile = d.fm.AddNewFile()
 		d.fm.MakeFileActive(dbfile.id)
 	}
-	file := dbfile.GetFile()
 	offset = int64(-1)
 	fid = dbfile.id
 	withLocks(func() {
+		file := dbfile.GetFile()
 		fileInfo, fileWriteErr := file.Stat()
 		if fileWriteErr != nil {
 			fid = "-1"
@@ -57,7 +56,7 @@ func (d *DiskMgr) AppendBlock(block []byte) (fid string, offset int64, fileWrite
 		offset = fileInfo.Size()
 		_, fileWriteErr = file.Write(block)
 		file.Sync()
-	}, fileRWLock(dbfile.id))
+	}, fileLock(dbfile.id))
 
 	return fid, offset, fileWriteErr
 }

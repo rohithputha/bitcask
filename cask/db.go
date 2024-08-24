@@ -2,6 +2,7 @@ package cask
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -31,10 +32,9 @@ func NewCaskDb() *CaskDb {
 			diskMgr: diskMgr,
 			keyDir:  keyDir,
 			ed:      data.NewEnde(),
-			dmgr:    initDmgr(fileMgr, diskMgr, keyDir, make(chan string)),
+			dmgr:    initDmgr(fileMgr, diskMgr, keyDir, make(chan string, 1000)),
 		}
 	})
-
 	return caskDbInst
 }
 
@@ -57,6 +57,7 @@ func (c *CaskDb) Put(key interface{}, value interface{}) {
 		fid, offset, err := c.diskMgr.AppendBlock(blockBytes)
 		if err != nil {
 			log.Fatalf("Error appending block to file with offset: %d", offset)
+			return
 		}
 		c.keyDir.AddKey(c.getByteString(key), fid, int(offset), len(blockBytes), time)
 		fileSize := c.diskMgr.GetFileSize(fid)
@@ -74,6 +75,7 @@ func (c *CaskDb) Get(key interface{}) interface{} {
 		blockAddr = c.keyDir.GetBlockAddr(keyString)
 	}, keyDirRWLock())
 	if blockAddr == nil {
+		fmt.Println("block Adddress is nil")
 		return nil
 	}
 	blockBytes := c.diskMgr.ReadBlock(blockAddr.Fid, blockAddr.Offset, blockAddr.Size)

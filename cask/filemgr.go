@@ -1,7 +1,6 @@
 package cask
 
 import (
-	"errors"
 	"log"
 	"math"
 	"os"
@@ -68,71 +67,66 @@ func (fmgr *FileMgr) getFileName(id string, isActive bool, isComplete bool) stri
 }
 
 func (fmgr *FileMgr) AddNewFile() *DbFile {
-
-	nextId := fmgr.getnextFileId()
-	fileName := nextId + ".db"
-	fileLocation := filePath
-	file, err := os.OpenFile(fileLocation+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0755)
-	if err != nil {
-		log.Fatalf("Error opening file %s", fileLocation)
-	}
-
-	fmgr.dbFiles[nextId] = &DbFile{
-		id:         nextId,
-		file:       file,
-		fileLock:   &sync.Mutex{},
-		isActive:   false,
-		isComplete: false,
-		location:   fileLocation,
-	}
-
-	return fmgr.dbFiles[nextId]
+	var nid string
+	withLocks(func() {
+		nid = fmgr.getnextFileId()
+		fileName := nid + ".db"
+		fileLocation := filePath
+		file, err := os.OpenFile(fileLocation+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0755)
+		if err != nil {
+			log.Fatalf("Error opening file %s", fileLocation)
+		}
+		fmgr.dbFiles[nid] = &DbFile{
+			id:         nid,
+			file:       file,
+			fileLock:   &sync.Mutex{},
+			isActive:   false,
+			isComplete: false,
+			location:   fileLocation,
+		}
+	}, fileMgrLock())
+	return fmgr.dbFiles[nid]
 }
 
 func (fmgr *FileMgr) MakeFileActive(fileName string) error {
 
-	for _, file := range fmgr.dbFiles {
-		if file.isActive {
-			return errors.New("cask:filemgr::active file exists")
-		}
-	}
-
-	var dbFile *DbFile
-
 	withLocks(func() {
-		dbFile = fmgr.dbFiles[fileName]
-	}, fileMgrRWLock())
+		for _, file := range fmgr.dbFiles {
+			if file.isActive {
+				log.Fatalf("cask:filemgr::active file exists")
+			}
+		}
+		dbFile := fmgr.dbFiles[fileName]
+		dbFile.GetFile()
 
-	dbFile.GetFile()
+		oldFileName := fmgr.getFileName(dbFile.id, dbFile.isActive, dbFile.isComplete)
+		newFileName := fmgr.getFileName(fmgr.dbFiles[fileName].id, true, dbFile.isComplete)
 
-	oldFileName := fmgr.getFileName(dbFile.id, dbFile.isActive, dbFile.isComplete)
-	newFileName := fmgr.getFileName(fmgr.dbFiles[fileName].id, true, dbFile.isComplete)
+		err := os.Rename(dbFile.location+"/"+oldFileName, dbFile.location+"/"+newFileName)
+		if err != nil {
+			log.Fatalf("Error renaming file %s", oldFileName)
+		}
+		dbFile.isActive = true
+	}, fileMgrLock())
 
-	err := os.Rename(dbFile.location+"/"+oldFileName, dbFile.location+"/"+newFileName)
-	if err != nil {
-		log.Fatalf("Error renaming file %s", oldFileName)
-	}
-	dbFile.isActive = true
 	return nil
 }
 
 func (fmgr *FileMgr) MakeFileComplete(fid string) error {
 
-	var dbFile *DbFile
 	withLocks(func() {
-		dbFile = fmgr.dbFiles[fid]
-	}, fileMgrRWLock())
+		dbFile := fmgr.dbFiles[fid]
+		dbFile.GetFile()
+		oldFileName := fmgr.getFileName(fid, dbFile.isActive, dbFile.isComplete)
+		newFileName := fmgr.getFileName(fmgr.dbFiles[fid].id, false, true)
 
-	dbFile.GetFile()
-	oldFileName := fmgr.getFileName(fid, dbFile.isActive, dbFile.isComplete)
-	newFileName := fmgr.getFileName(fmgr.dbFiles[fid].id, false, true)
-
-	err := os.Rename(dbFile.location+"/"+oldFileName, dbFile.location+"/"+newFileName)
-	if err != nil {
-		log.Fatalf("Error renaming file %s", oldFileName)
-	}
-	dbFile.isActive = false
-	dbFile.isComplete = true
+		err := os.Rename(dbFile.location+"/"+oldFileName, dbFile.location+"/"+newFileName)
+		if err != nil {
+			log.Fatalf("Error renaming file %s, %s", oldFileName, err)
+		}
+		dbFile.isActive = false
+		dbFile.isComplete = true
+	}, fileMgrLock())
 	return nil
 }
 
@@ -249,8 +243,6 @@ func (dbf *DbFile) GetId() string {
 }
 
 func (dbf *DbFile) DeleteFile() {
-	dbf.fileLock.Lock()
-	defer dbf.fileLock.Unlock()
 	err := os.Remove(dbf.location + "/" + dbf.id + "_c.db")
 	if err != nil {
 		log.Fatalf("Error deleting file: %v", err)
@@ -260,57 +252,59 @@ func (dbf *DbFile) DeleteFile() {
 // -----------------------------------------------
 
 func (dbfi *DbFileIteratorStr) Next() ([]byte, int) {
-	dbfi.file.fileLock.Lock()
-	defer dbfi.file.fileLock.Unlock()
-
-	stat, err := dbfi.file.file.Stat()
-	if err != nil {
-		log.Fatalf("Error getting file info: %v", err)
-	}
-	fileSize := stat.Size()
-
-	totalBytes := make([]byte, 0)
-	bytesRead := 0
-	found := false
-	offset := dbfi.presentOffset
-
-	for !found {
-		if int64(dbfi.presentOffset+bytesRead) >= fileSize {
-			found = true
-			continue
+	var totalBytes []byte
+	var offset int
+	withLocks(func() {
+		stat, err := dbfi.file.file.Stat()
+		if err != nil {
+			log.Fatalf("Error getting file info: %v", err)
 		}
-		buffSize := int(math.Min(float64(10), float64(fileSize-int64(dbfi.presentOffset+bytesRead))))
-		blockBytes := make([]byte, buffSize)
-		_, err = dbfi.file.file.ReadAt(blockBytes, int64(dbfi.presentOffset+bytesRead))
-		for i, b := range blockBytes {
+		fileSize := stat.Size()
 
-			if b == '\r' && i > 0 {
-				blockBytes = blockBytes[:i]
+		totalBytes = make([]byte, 0)
+		bytesRead := 0
+		found := false
+		offset = dbfi.presentOffset
+
+		for !found {
+			if int64(dbfi.presentOffset+bytesRead) >= fileSize {
 				found = true
-				break
+				continue
 			}
+			buffSize := int(math.Min(float64(10), float64(fileSize-int64(dbfi.presentOffset+bytesRead))))
+			blockBytes := make([]byte, buffSize)
+			_, err = dbfi.file.file.ReadAt(blockBytes, int64(dbfi.presentOffset+bytesRead))
+			for i, b := range blockBytes {
 
-			bytesRead += 1
+				if b == '\r' && i > 0 {
+					blockBytes = blockBytes[:i]
+					found = true
+					break
+				}
+
+				bytesRead += 1
+			}
+			totalBytes = append(totalBytes, blockBytes...)
 		}
-		totalBytes = append(totalBytes, blockBytes...)
-	}
-	dbfi.presentOffset += (bytesRead)
-	if err != nil {
-		log.Fatalf("Error reading block from file: %v", err)
-	}
+		dbfi.presentOffset += (bytesRead)
+		if err != nil {
+			log.Fatalf("Error reading block from file: %v", err)
+		}
+	}, fileRWLock(dbfi.file.GetId()))
 	return totalBytes, offset
 }
 
 func (dbfi *DbFileIteratorStr) IsNext() bool {
-	dbfi.file.fileLock.Lock()
-	defer dbfi.file.fileLock.Unlock()
-
-	stat, err := dbfi.file.file.Stat()
-	if err != nil {
-		log.Fatalf("Error getting file info: %v", err)
-	}
-	fileSize := stat.Size()
-	return int64(dbfi.presentOffset) < fileSize
+	var isNext bool
+	withLocks(func() {
+		stat, err := dbfi.file.file.Stat()
+		if err != nil {
+			log.Fatalf("Error getting file info: %v", err)
+		}
+		fileSize := stat.Size()
+		isNext = int64(dbfi.presentOffset) < fileSize
+	}, fileRWLock(dbfi.file.GetId()))
+	return isNext
 }
 
 func (dbf *DbFile) NewIterator() DbFileIterator {

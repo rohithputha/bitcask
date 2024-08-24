@@ -3,7 +3,7 @@ package cask
 import (
 	"bitcask/data"
 	"encoding/json"
-
+	"fmt"
 	"log"
 	"os"
 )
@@ -54,14 +54,17 @@ func (d *dmgr) mergeFiles(completeFiles []*DbFile) {
 		iter := file.NewIterator()
 		for iter.IsNext() {
 			bytes, _ := iter.Next()
+			if len(bytes) < 18 {
+				continue
+			}
 			timestamp, key, value := ende.DecodeData(bytes)
 			stringKey := d.getByteString(key)
 
 			if timestamp == -1 {
 				continue
 			}
-
-			if timestamp == d.keyDir.GetBlockAddr(stringKey).Timestamp {
+			presentKeyVal := temp[stringKey]
+			if presentKeyVal == nil || timestamp > presentKeyVal.Timestamp {
 				tbytes := ende.EncodeData(timestamp, key, value)
 				toffset, err := d.diskMgr.AppendBlockWithFileId(tdbFile.GetId(), tbytes)
 				if err != nil {
@@ -73,19 +76,33 @@ func (d *dmgr) mergeFiles(completeFiles []*DbFile) {
 		cFiles = append(cFiles, file)
 	}
 	tFile.Sync()
-
 	d.filemgr.MakeFileComplete(tdbFile.GetId())
+	presentKeyVal := new(BlockAddr)
+	for key, blockAddr := range temp {
+		withLocks(func() {
+			presentKeyVal = d.keyDir.GetBlockAddr(key)
+		}, keyDirRWLock())
+		if presentKeyVal == nil {
+			continue
+		}
+		if presentKeyVal.Timestamp <= blockAddr.Timestamp {
+			withLocks(func() {
+				d.keyDir.AddKey(key, blockAddr.Fid, blockAddr.Offset, blockAddr.Size, blockAddr.Timestamp)
+			}, keyDirLock())
+		}
+	}
+	//d.keyDir.SetNewBlockAddrMap(temp)
 
-	d.keyDir.SetNewBlockAddrMap(temp)
 	for _, file := range cFiles {
 		d.filemgr.DeleteFile(file.GetId())
 	}
+	fmt.Println(tdbFile.GetId())
+
 }
 
 func (d *dmgr) manage() {
 	for {
-		fid := <-d.afExSig
-		d.filemgr.MakeFileComplete(fid)
+		<-d.afExSig
 		completeFiles := d.filemgr.GetCompleteFiles()
 		if len(completeFiles) >= 5 {
 			d.mergeFiles(completeFiles)
