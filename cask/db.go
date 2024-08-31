@@ -1,13 +1,8 @@
 package cask
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"sync"
-	"time"
-
 	"bitcask/data"
+	"sync"
 )
 
 type CaskDb struct {
@@ -21,67 +16,69 @@ type CaskDb struct {
 var caskDbInst *CaskDb
 var caskDbOnce sync.Once
 
-func NewCaskDb() *CaskDb {
-	caskDbOnce.Do(func() {
-		initLocks()
-		fileMgr := InitFileMgr()
-		keyDir := NewKeyDir(fileMgr, data.NewEnde())
-		diskMgr := NewDiskMgr(fileMgr)
-		caskDbInst = &CaskDb{
-			fileMgr: fileMgr,
-			diskMgr: diskMgr,
-			keyDir:  keyDir,
-			ed:      data.NewEnde(),
-			dmgr:    initDmgr(fileMgr, diskMgr, keyDir, make(chan string, 1000)),
-		}
-	})
-	return caskDbInst
-}
+//func NewCaskDb() *CaskDb {
+//	caskDbOnce.Do(func() {
+//		initLocks()
+//		fileMgr := InitFileMgr()
+//		keyDir := NewKeyDir(fileMgr, data.NewEnde())
+//		diskMgr := NewDiskMgr(fileMgr)
+//		caskDbInst = &CaskDb{
+//			fileMgr: fileMgr,
+//			diskMgr: diskMgr,
+//			keyDir:  keyDir,
+//			ed:      data.NewEnde(),
+//			dmgr:    initDmgr(fileMgr, diskMgr, keyDir, make(chan string, 1000)),
+//		}
+//	})
+//	return caskDbInst
+//}
 
-func (c *CaskDb) ReadDbFiles() {
+//func (c *CaskDb) ReadDbFiles() {
+//
+//}
+//
+//func (c *CaskDb) getByteString(key interface{}) string {
+//	b, err := json.Marshal(key)
+//	if err != nil {
+//		log.Fatalf("Error marshalling key: %v", err)
+//	}
+//	return string(b)
+//}
+//
+//func (c *CaskDb) Put(key interface{}, value interface{}) {
+//	time := time.Now().Unix()
+//	blockBytes := c.ed.EncodeData(time, key, value)
+//	withLocks(func() {
+//		fid, offset, err := c.diskMgr.AppendBlock(blockBytes)
+//		if err != nil {
+//			log.Fatalf("Error appending block to file with offset: %d", offset)
+//			return
+//		}
+//		c.keyDir.AddKey(c.getByteString(key), fid, int(offset), len(blockBytes), time)
+//		fileSize := c.diskMgr.GetFileSize(fid)
+//		if fileSize > 5000 {
+//			c.fileMgr.MakeFileComplete(fid)
+//			c.dmgr.afExSig <- fid
+//		}
+//	}, keyDirLock())
+//}
 
-}
+//func (c *CaskDb) Get(key interface{}) interface{} {
+//	keyString := c.getByteString(key)
+//	var blockAddr *BlockAddr
+//	withLocks(func() {
+//		blockAddr = c.keyDir.GetBlockAddr(keyString)
+//	}, keyDirRWLock())
+//	if blockAddr == nil {
+//		fmt.Println("block Adddress is nil")
+//		return nil
+//	}
+//	blockBytes := c.diskMgr.ReadBlock(blockAddr.Fid, blockAddr.Offset, blockAddr.Size)
+//	_, key, value := c.ed.DecodeData(blockBytes)
+//	return value
+//}
 
-func (c *CaskDb) getByteString(key interface{}) string {
-	b, err := json.Marshal(key)
-	if err != nil {
-		log.Fatalf("Error marshalling key: %v", err)
-	}
-	return string(b)
-}
-
-func (c *CaskDb) Put(key interface{}, value interface{}) {
-	time := time.Now().Unix()
-	blockBytes := c.ed.EncodeData(time, key, value)
-	withLocks(func() {
-		fid, offset, err := c.diskMgr.AppendBlock(blockBytes)
-		if err != nil {
-			log.Fatalf("Error appending block to file with offset: %d", offset)
-			return
-		}
-		c.keyDir.AddKey(c.getByteString(key), fid, int(offset), len(blockBytes), time)
-		fileSize := c.diskMgr.GetFileSize(fid)
-		if fileSize > 5000 {
-			c.fileMgr.MakeFileComplete(fid)
-			c.dmgr.afExSig <- fid
-		}
-	}, keyDirLock())
-}
-
-func (c *CaskDb) Get(key interface{}) interface{} {
-	keyString := c.getByteString(key)
-	var blockAddr *BlockAddr
-	withLocks(func() {
-		blockAddr = c.keyDir.GetBlockAddr(keyString)
-	}, keyDirRWLock())
-	if blockAddr == nil {
-		fmt.Println("block Adddress is nil")
-		return nil
-	}
-	blockBytes := c.diskMgr.ReadBlock(blockAddr.Fid, blockAddr.Offset, blockAddr.Size)
-	_, key, value := c.ed.DecodeData(blockBytes)
-	return value
-}
+//func
 
 /*
 multithreading env for put()
