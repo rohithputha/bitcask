@@ -1,16 +1,15 @@
 package cask
 
 import (
-	"bitcask/data"
 	"sync"
 )
 
 type CaskDb struct {
-	diskMgr *DiskMgr
-	ed      *data.Ende
-	keyDir  *KeyDir
-	dmgr    *dmgr
-	fileMgr *FileMgr
+	//diskMgr *DiskMgr
+	//ed      *data.Ende
+	//keyDir  *KeyDir
+	//dmgr    *dmgr
+	//fileMgr *FileMgr
 }
 
 var caskDbInst *CaskDb
@@ -113,3 +112,17 @@ multithreading env for get() and put() mix with the same key
  -> is consistency measured based on time it reads from file or time it reads from keydir??
 
 */
+
+func NewCaskDb() *CaskDb {
+	done := make(chan interface{}) // this has to be initliased somewhere else... temporarily here
+	initDbFileManager(done)
+	initKeyDir(done)
+	manageDb(fileSizeSignalChan, done)
+	return &CaskDb{}
+}
+func (c *CaskDb) Get(key interface{}) interface{} {
+	return getPipeline(key)
+}
+func (c *CaskDb) Put(key interface{}, value interface{}) {
+	putPipeline(key, value)
+}

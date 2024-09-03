@@ -10,7 +10,7 @@ import (
 
 type BlockAddr struct {
 	Fid       string
-	Offset    int
+	Offset    int64
 	Size      int
 	Timestamp int64
 }
@@ -24,41 +24,33 @@ type KeyDir struct {
 var keyDirInst *KeyDir
 var keyDirOnce sync.Once
 
-func NewKeyDir(fileMgr *FileMgr, ende *data.Ende) *KeyDir {
+// ################################ new concurrency design ################################
 
-	keyDirInst = &KeyDir{
-		ende:    ende,
-		fileMgr: fileMgr,
-	}
-	keyDirInst.initMap()
-	return keyDirInst
+type keyDirChangeOp struct {
+	op         string
+	key        string
+	opDoneChan chan interface{}
+	block      *BlockAddr
 }
 
-func (k *KeyDir) initMap() {
-	k.m = make(map[string]*BlockAddr)
-
-	for _, file := range k.fileMgr.GetAllFiles() {
-		iter := file.NewIterator()
-		for iter.IsNext() {
-			bytes, offset := iter.Next()
-			timestamp, key, _ := k.ende.DecodeData(bytes)
-			if timestamp == -1 {
-				continue
-			}
-			stringKey := k.getByteString(key)
-
-			if v, ok := k.m[stringKey]; ok {
-				if v.Timestamp < timestamp {
-					k.m[stringKey] = &BlockAddr{Fid: file.GetId(), Offset: offset, Size: len(bytes), Timestamp: timestamp}
-				}
-			} else {
-				k.m[stringKey] = &BlockAddr{Fid: file.GetId(), Offset: offset, Size: len(bytes), Timestamp: timestamp}
-			}
-		}
-	}
+type KeyBlockAddr struct {
+	block *BlockAddr
+	key   string
 }
 
-func (k *KeyDir) getByteString(key interface{}) string {
+var keyDir map[string]*BlockAddr
+var keyDirChangeOpChannel chan keyDirChangeOp
+var kdOnce sync.Once
+
+func initKeyDir(done <-chan interface{}) {
+	kdOnce.Do(func() {
+		keyDir = make(map[string]*BlockAddr)
+		keyDirChangeOpChannel = make(chan keyDirChangeOp)
+		initPresentKeyValues()
+		keyDirChangeOps(done)
+	})
+}
+func getByteString(key interface{}) string {
 	b, err := json.Marshal(key)
 	if err != nil {
 		log.Fatalf("Error marshalling key: %v", err)
@@ -66,18 +58,67 @@ func (k *KeyDir) getByteString(key interface{}) string {
 	return string(b)
 }
 
-func (k *KeyDir) AddKey(key string, fid string, offset int, size int, timestamp int64) {
-	k.m[key] = &BlockAddr{Fid: fid, Offset: offset, Size: size, Timestamp: timestamp}
+func initPresentKeyValues() {
+	res := getAllFiles()
+	ende := data.NewEnde()
+	for _, file := range res.DbFiles {
+		iter := file.iterator()
+		for opRes := range iter {
+			if opRes.Err != nil {
+				log.Fatalf("Error reading block from file %s", file.id)
+			}
+			timestamp, key, _ := ende.DecodeData(opRes.BlockBytes)
+			if timestamp == -1 {
+				continue
+			}
+			stringKey := getByteString(key)
+
+			if v, ok := keyDir[stringKey]; ok {
+				if v.Timestamp < timestamp {
+					keyDir[stringKey] = &BlockAddr{Fid: file.id, Offset: opRes.Offset, Size: len(opRes.BlockBytes), Timestamp: timestamp}
+				}
+			} else {
+				keyDir[stringKey] = &BlockAddr{Fid: file.id, Offset: opRes.Offset, Size: len(opRes.BlockBytes), Timestamp: timestamp}
+			}
+
+		}
+	}
 }
 
-func (k *KeyDir) GetBlockAddr(key string) *BlockAddr {
-	var g *BlockAddr
-	g = k.m[key]
-	return g
+func keyDirChangeOps(done <-chan interface{}) {
+	go func() {
+		for {
+			select {
+			case op := <-keyDirChangeOpChannel:
+				switch op.op {
+				case "add":
+					keyDir[op.key] = op.block
+					close(op.opDoneChan)
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+}
+func getBlockFromMem(key interface{}) <-chan BlockAddr {
+	blockChan := make(chan BlockAddr)
+	go func() {
+		strKey := getByteString(key)
+		blockChan <- *keyDir[strKey]
+	}()
+	return blockChan
 }
 
-func (k *KeyDir) SetNewBlockAddrMap(newMap map[string]*BlockAddr) {
-	withLocks(func() {
-		k.m = newMap
-	}, keyDirLock())
+//func addBlock(key string, block BlockAddr) {
+//	keyDirChangeOpChannel <- keyDirChangeOp{op: "add", key: key, block: &block}
+//}
+
+func putBlockOnMem(blockAddrChan <-chan KeyBlockAddr) <-chan interface{} {
+	putDone := make(chan interface{})
+	go func() {
+		kb := <-blockAddrChan
+		keyDirChangeOpChannel <- keyDirChangeOp{op: "add", key: kb.key, block: kb.block, opDoneChan: putDone}
+	}()
+	return putDone
 }

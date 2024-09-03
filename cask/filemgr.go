@@ -1,7 +1,9 @@
 package cask
 
 import (
+	"bitcask/data"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -42,282 +44,6 @@ type FileMgr struct {
 	dbFiles map[string]*DbFile
 }
 
-func (fmgr *FileMgr) GetFile(id string) *DbFile {
-	return fmgr.dbFiles[id]
-}
-
-func (fmgr *FileMgr) getnextFileId() string {
-	var maxId int64
-	for _, file := range fmgr.dbFiles {
-		id, err := strconv.ParseInt(file.id, 10, 64)
-		if err != nil {
-			log.Fatalf("Error parsing file id: %v", err)
-		}
-		if id > maxId {
-			maxId = id
-		}
-	}
-	return strconv.FormatInt(maxId+1, 10)
-}
-
-func (fmgr *FileMgr) getFileName(id string, isActive bool, isComplete bool) string {
-	if isActive {
-		return id + "_a.db"
-	}
-	if isComplete {
-		return id + "_c.db"
-	}
-	return id + ".db"
-}
-
-func (fmgr *FileMgr) AddNewFile() *DbFile {
-	var nid string
-	withLocks(func() {
-		nid = fmgr.getnextFileId()
-		fileName := nid + ".db"
-		fileLocation := filePath
-		file, err := os.OpenFile(fileLocation+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0755)
-		if err != nil {
-			log.Fatalf("Error opening file %s", fileLocation)
-		}
-		fmgr.dbFiles[nid] = &DbFile{
-			id:         nid,
-			file:       file,
-			fileLock:   &sync.Mutex{},
-			isActive:   false,
-			isComplete: false,
-			location:   fileLocation,
-		}
-	}, fileMgrLock())
-	return fmgr.dbFiles[nid]
-}
-
-func (fmgr *FileMgr) MakeFileActive(fileName string) error {
-
-	withLocks(func() {
-		for _, file := range fmgr.dbFiles {
-			if file.isActive {
-				log.Fatalf("cask:filemgr::active file exists")
-			}
-		}
-		dbFile := fmgr.dbFiles[fileName]
-		dbFile.GetFile()
-
-		oldFileName := fmgr.getFileName(dbFile.id, dbFile.isActive, dbFile.isComplete)
-		newFileName := fmgr.getFileName(fmgr.dbFiles[fileName].id, true, dbFile.isComplete)
-
-		err := os.Rename(dbFile.location+"/"+oldFileName, dbFile.location+"/"+newFileName)
-		if err != nil {
-			log.Fatalf("Error renaming file %s", oldFileName)
-		}
-		dbFile.isActive = true
-	}, fileMgrLock())
-
-	return nil
-}
-
-func (fmgr *FileMgr) MakeFileComplete(fid string) error {
-
-	withLocks(func() {
-		dbFile := fmgr.dbFiles[fid]
-		dbFile.GetFile()
-		oldFileName := fmgr.getFileName(fid, dbFile.isActive, dbFile.isComplete)
-		newFileName := fmgr.getFileName(fmgr.dbFiles[fid].id, false, true)
-
-		err := os.Rename(dbFile.location+"/"+oldFileName, dbFile.location+"/"+newFileName)
-		if err != nil {
-			log.Fatalf("Error renaming file %s, %s", oldFileName, err)
-		}
-		dbFile.isActive = false
-		dbFile.isComplete = true
-	}, fileMgrLock())
-	return nil
-}
-
-func (fmgr *FileMgr) GetActiveFile() *DbFile {
-
-	var dbFile *DbFile
-	withLocks(func() {
-		for _, file := range fmgr.dbFiles {
-			if file.isActive {
-				dbFile = file
-			}
-		}
-	}, fileMgrRWLock())
-
-	return dbFile
-}
-
-func (fmgr *FileMgr) GetCompleteFiles() []*DbFile {
-
-	var files []*DbFile
-	withLocks(func() {
-		for _, file := range fmgr.dbFiles {
-			if file.isComplete {
-				files = append(files, file)
-			}
-		}
-	}, fileMgrRWLock())
-	return files
-}
-
-func (fmgr *FileMgr) GetAllFiles() []*DbFile {
-	files := fmgr.GetCompleteFiles()
-	activeFile := fmgr.GetActiveFile()
-	if activeFile != nil {
-		files = append(files, activeFile)
-	}
-	return files
-}
-
-func (fmgr *FileMgr) GetFileSize(fid string) int64 {
-
-	var file *DbFile
-	withLocks(func() {
-		file = fmgr.dbFiles[fid]
-	}, fileMgrRWLock())
-
-	stat, err := file.file.Stat()
-	if err != nil {
-		log.Fatalf("Error getting file info: %v", err)
-	}
-	return stat.Size()
-}
-
-func (fmgr *FileMgr) DeleteFile(fid string) {
-	withLocks(func() {
-		dbFile := fmgr.dbFiles[fid]
-		dbFile.DeleteFile()
-
-		delete(fmgr.dbFiles, fid)
-	}, fileMgrLock())
-}
-func InitFileMgr() *FileMgr {
-
-	initOnce.Do(func() {
-		fmgr := &FileMgr{
-			dbFiles: make(map[string]*DbFile),
-		}
-
-		files, err := os.ReadDir(filePath)
-		if err != nil {
-			log.Fatalf("Error reading directory: %v", err)
-		}
-
-		for _, file := range files {
-			if !file.IsDir() {
-				fileName := file.Name()
-				id := strings.Split(fileName, ".")[0]
-				id = strings.Split(id, "_")[0]
-				isActive := strings.Contains(fileName, "_a")
-				isComplete := strings.Contains(fileName, "_c")
-				fileOb, err := os.OpenFile(filePath+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0755)
-				if err != nil {
-					log.Fatalf("Error opening file %s: %v", fileName, err)
-				}
-
-				withLocks(func() {
-					fmgr.dbFiles[id] = &DbFile{
-						id:         id,
-						file:       fileOb,
-						fileLock:   &sync.Mutex{},
-						isActive:   isActive,
-						isComplete: isComplete,
-						location:   filePath,
-					}
-				}, fileMgrLock())
-
-				// Additional initialization for DbFile can be done here
-			}
-		}
-		fileMgrInst = fmgr
-	})
-
-	return fileMgrInst
-}
-
-//------------------------------------------------
-
-func (dbf *DbFile) GetFile() *os.File {
-	return dbf.file
-}
-
-func (dbf *DbFile) GetId() string {
-	return dbf.id
-}
-
-func (dbf *DbFile) DeleteFile() {
-	err := os.Remove(dbf.location + "/" + dbf.id + "_c.db")
-	if err != nil {
-		log.Fatalf("Error deleting file: %v", err)
-	}
-}
-
-// -----------------------------------------------
-
-func (dbfi *DbFileIteratorStr) Next() ([]byte, int) {
-	var totalBytes []byte
-	var offset int
-	withLocks(func() {
-		stat, err := dbfi.file.file.Stat()
-		if err != nil {
-			log.Fatalf("Error getting file info: %v", err)
-		}
-		fileSize := stat.Size()
-
-		totalBytes = make([]byte, 0)
-		bytesRead := 0
-		found := false
-		offset = dbfi.presentOffset
-
-		for !found {
-			if int64(dbfi.presentOffset+bytesRead) >= fileSize {
-				found = true
-				continue
-			}
-			buffSize := int(math.Min(float64(10), float64(fileSize-int64(dbfi.presentOffset+bytesRead))))
-			blockBytes := make([]byte, buffSize)
-			_, err = dbfi.file.file.ReadAt(blockBytes, int64(dbfi.presentOffset+bytesRead))
-			for i, b := range blockBytes {
-
-				if b == '\r' && i > 0 {
-					blockBytes = blockBytes[:i]
-					found = true
-					break
-				}
-
-				bytesRead += 1
-			}
-			totalBytes = append(totalBytes, blockBytes...)
-		}
-		dbfi.presentOffset += (bytesRead)
-		if err != nil {
-			log.Fatalf("Error reading block from file: %v", err)
-		}
-	}, fileRWLock(dbfi.file.GetId()))
-	return totalBytes, offset
-}
-
-func (dbfi *DbFileIteratorStr) IsNext() bool {
-	var isNext bool
-	withLocks(func() {
-		stat, err := dbfi.file.file.Stat()
-		if err != nil {
-			log.Fatalf("Error getting file info: %v", err)
-		}
-		fileSize := stat.Size()
-		isNext = int64(dbfi.presentOffset) < fileSize
-	}, fileRWLock(dbfi.file.GetId()))
-	return isNext
-}
-
-func (dbf *DbFile) NewIterator() DbFileIterator {
-	return &DbFileIteratorStr{
-		file:          dbf,
-		presentOffset: 0,
-	}
-}
-
 // ----------------------------------------------- New Version ---------------------------
 var fileMgrOnce sync.Once
 
@@ -334,6 +60,7 @@ type DfmResult struct {
 
 var opChannel chan operation
 var commonOpResultChan <-chan DfmResult
+var fileSizeSignalChan chan int64
 
 func initDbFileMap(done <-chan interface{}, files []os.DirEntry) *dbFileMap {
 	dfm := make(dbFileMap)
@@ -344,7 +71,7 @@ func initDbFileMap(done <-chan interface{}, files []os.DirEntry) *dbFileMap {
 func (dfm *dbFileMap) getMaxFileId(files []os.DirEntry) int64 {
 	var maxId int64
 	for _, file := range files {
-		if file.IsDir() {
+		if !file.IsDir() {
 			fileName := file.Name()
 			id := strings.Split(fileName, ".")[0]
 			id = strings.Split(id, "_")[0]
@@ -362,6 +89,7 @@ func (dfm *dbFileMap) getMaxFileId(files []os.DirEntry) int64 {
 func (dfm *dbFileMap) initOperation(done <-chan interface{}, maxFileId int64) {
 	opChannel = make(chan operation)
 	result := make(chan DfmResult)
+	fileSizeSignalChan = make(chan int64)
 	commonOpResultChan = result
 
 	nextFileId := make(chan string)
@@ -381,26 +109,41 @@ func (dfm *dbFileMap) initOperation(done <-chan interface{}, maxFileId int64) {
 		switch oper.op {
 		case "put":
 			(*dfm)[oper.id] = oper.dbfile
+			oper.dbfile.startFileOperation()
 			result <- DfmResult{Err: nil}
 		case "putnew":
-			id := <-nextFileId
-			fileName := id + ".db"
-			fileLocation := filePath
-			file, err := os.OpenFile(fileLocation+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0755)
-			if err != nil {
-				log.Fatalf("Error opening file %s", fileLocation)
+			select {
+			case id := <-nextFileId:
+				fileName := id + ".db"
+				fileLocation := filePath
+				file, err := os.OpenFile(fileLocation+"/"+fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0755)
+				if err != nil {
+					log.Fatalf("Error opening file %s", fileLocation)
+				}
+				(*dfm)[id] = &DbFile{
+					id:                     id,
+					file:                   file,
+					fileLock:               &sync.Mutex{},
+					isActive:               false,
+					isComplete:             false,
+					location:               fileLocation,
+					fileChangeResultOpChan: make(chan fileOpResult),
+					fileChangeOpChan:       make(chan fileChangeIO),
+				}
+				(*dfm)[id].startFileOperation()
+				result <- DfmResult{DbFiles: []*DbFile{(*dfm)[id]}, Err: nil}
+			case <-done:
+				return
 			}
-			(*dfm)[id] = &DbFile{
-				id:         id,
-				file:       file,
-				fileLock:   &sync.Mutex{},
-				isActive:   false,
-				isComplete: false,
-				location:   fileLocation,
-			}
-			(*dfm)[id].startFileOperation()
-			result <- DfmResult{DbFiles: []*DbFile{(*dfm)[id]}, Err: nil}
+
 		case "delete":
+			//close((*dfm)[oper.id].fileChangeOpChan)
+			//close((*dfm)[oper.id].fileChangeResultOpChan)
+			err := os.Remove((*dfm)[oper.id].location + "/" + (*dfm)[oper.id].id + "_c.db")
+			if err != nil {
+				result <- DfmResult{Err: errors.New("DbfileMapError::Error deleting file: " + err.Error())}
+				return
+			}
 			delete(*dfm, oper.id)
 			result <- DfmResult{Err: nil}
 		case "get":
@@ -415,6 +158,13 @@ func (dfm *dbFileMap) initOperation(done <-chan interface{}, maxFileId int64) {
 				filesArr = append(filesArr, dbfile)
 			}
 			result <- DfmResult{DbFiles: filesArr, Err: nil}
+		case "completefile":
+			if dbfile, ok := (*dfm)[oper.id]; ok {
+				dbfile.makeFileComplete()
+				result <- DfmResult{DbFiles: []*DbFile{dbfile}, Err: nil}
+			} else {
+				result <- DfmResult{DbFiles: nil, Err: errors.New("DbfileMapError::Could not mark file complete with id:" + oper.id)}
+			}
 		}
 
 	}
@@ -474,7 +224,10 @@ func putNewFile() DfmResult {
 	return <-commonOpResultChan
 }
 
-// more methods on making the file complete need to be implemented
+func completeFile(id string) DfmResult {
+	opChannel <- operation{op: "completefile", id: id}
+	return <-commonOpResultChan
+}
 
 func initDbFileManager(done <-chan interface{}) {
 	fileMgrOnce.Do(func() {
@@ -482,6 +235,8 @@ func initDbFileManager(done <-chan interface{}) {
 		if err != nil {
 			log.Fatalf("Error reading directory: %v", err)
 		}
+		// all the making of the channels should happend here...?
+
 		initDbFileMap(done, files)
 		for _, file := range files {
 			if !file.IsDir() {
@@ -495,12 +250,14 @@ func initDbFileManager(done <-chan interface{}) {
 					log.Fatalf("Error opening file %s: %v", fileName, err)
 				}
 				dbFile := &DbFile{
-					id:         id,
-					file:       fileOb,
-					fileLock:   &sync.Mutex{},
-					isActive:   isActive,
-					isComplete: isComplete,
-					location:   filePath,
+					id:                     id,
+					file:                   fileOb,
+					fileLock:               &sync.Mutex{},
+					isActive:               isActive,
+					isComplete:             isComplete,
+					location:               filePath,
+					fileChangeResultOpChan: make(chan fileOpResult),
+					fileChangeOpChan:       make(chan fileChangeIO),
 				}
 				putFile(id, dbFile)
 			}
@@ -520,12 +277,14 @@ iterator on file
 */
 
 type fileChangeIO struct {
-	op        string
-	BlockByes []byte
+	op         string
+	BlockBytes []byte
 }
 
 type fileOpResult struct {
 	BlockBytes []byte
+	Offset     int64
+	Fid        string
 	Err        error
 }
 
@@ -535,24 +294,24 @@ func (file *DbFile) startFileOperation() {
 	file.fileChangeOps()
 }
 
-func (file *DbFile) makeFileComplete() {
-	file.isComplete = true
-	file.isActive = false
-	close(file.fileChangeOpChan)
-	close(file.fileChangeResultOpChan)
+func (file *DbFile) makeFileComplete() error {
 	oldFileName := getFileName(file.id, file.isActive, file.isComplete)
 	newFileName := getFileName(file.id, false, true)
 
 	err := os.Rename(file.location+"/"+oldFileName, file.location+"/"+newFileName)
+	file.isComplete = true
+	file.isActive = false
 	if err != nil {
-		log.Fatalf("Error renaming file %s, %s", oldFileName, err)
+		log.Println("Error renaming file %s, %s", oldFileName, err)
+		return err
 	}
+	return nil
 }
 func (file *DbFile) makeFileActive() {
+	oldFileName := getFileName(file.id, false, false)
+	newFileName := getFileName(file.id, true, false)
 	file.isActive = true
 	file.isComplete = false
-	oldFileName := getFileName(file.id, file.isActive, file.isComplete)
-	newFileName := getFileName(file.id, true, false)
 
 	err := os.Rename(file.location+"/"+oldFileName, file.location+"/"+newFileName)
 	if err != nil {
@@ -565,17 +324,23 @@ func (file *DbFile) fileChangeOps() <-chan fileOpResult {
 	performFileOps := func(oper fileChangeIO) {
 		switch oper.op {
 		case "appendblock":
+			fmt.Println("appending block")
 			stat, err := file.file.Stat()
 			if err != nil {
 				file.fileChangeResultOpChan <- fileOpResult{Err: err}
 				return
 			}
 			offset := stat.Size()
-			n, err := file.file.WriteAt(oper.BlockByes, offset)
-			if err != nil || n != len(oper.BlockByes) {
+			n, err := file.file.Write(oper.BlockBytes)
+			if err != nil || n != len(oper.BlockBytes) {
+				fmt.Println(err)
 				file.fileChangeResultOpChan <- fileOpResult{Err: errors.New("FileOperationError::error while writing block to file")}
 			}
-			file.fileChangeResultOpChan <- fileOpResult{Err: nil}
+			err = file.file.Sync()
+			if err != nil {
+				file.fileChangeResultOpChan <- fileOpResult{Err: errors.New("FileOperationError::error while writing block to file")}
+			}
+			file.fileChangeResultOpChan <- fileOpResult{Offset: offset, Fid: file.id, Err: nil}
 		}
 	}
 	go func() {
@@ -586,7 +351,7 @@ func (file *DbFile) fileChangeOps() <-chan fileOpResult {
 	return file.fileChangeResultOpChan
 }
 
-func (file *DbFile) getBlock(offset int64, size int64) <-chan fileOpResult {
+func (file *DbFile) getBlock(offset int64, size int) <-chan fileOpResult {
 	fileOpResultChan := make(chan fileOpResult)
 	go func() {
 		defer close(fileOpResultChan)
@@ -608,8 +373,22 @@ func (file *DbFile) getBlock(offset int64, size int64) <-chan fileOpResult {
 }
 
 func (file *DbFile) appendBlock(b []byte) <-chan fileOpResult {
-	file.fileChangeOpChan <- fileChangeIO{op: "appendblock", BlockByes: b}
-	return file.fileChangeResultOpChan
+	fileOpResultChan := make(chan fileOpResult)
+	go func() {
+		defer close(fileOpResultChan)
+		file.fileChangeOpChan <- fileChangeIO{op: "appendblock", BlockBytes: b}
+		fileOpResultChan <- <-file.fileChangeResultOpChan
+		fileSizeSignalChan <- int64(len(b))
+	}()
+	return fileOpResultChan
+}
+
+func (file *DbFile) getSize() int64 {
+	stat, err := file.file.Stat()
+	if err != nil {
+		log.Fatalf("Error getting file info: %v", err)
+	}
+	return stat.Size()
 }
 
 func (file *DbFile) iterator() <-chan fileOpResult {
@@ -641,17 +420,20 @@ func (file *DbFile) iterator() <-chan fileOpResult {
 				blockBytes := make([]byte, buffSize)
 				_, err = file.file.ReadAt(blockBytes, offset+bytesRead)
 				for i, b := range blockBytes {
+					bytesRead += 1
 					if b == '\r' && i > 0 {
-						blockBytes = blockBytes[:i]
 						found = true
 						break
 					}
-					bytesRead += 1
+					blockBytes = blockBytes[:i]
 				}
 				totalBytes = append(totalBytes, blockBytes...)
 			}
+			d := data.NewEnde()
+			_, key, val := d.DecodeData(totalBytes)
+			fmt.Println("iterator >>>> ", key, " : ", val)
+			fileOpResultChan <- fileOpResult{BlockBytes: totalBytes, Offset: offset}
 			offset += bytesRead
-			fileOpResultChan <- fileOpResult{BlockBytes: totalBytes}
 		}
 	}()
 	return fileOpResultChan

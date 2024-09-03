@@ -34,9 +34,10 @@ func (e *Ende) EncodeData(timestamp int64, key interface{}, value interface{}) [
 
 	finalBytes := append([]byte{s}, keyLengthBytes...)
 	finalBytes = append(finalBytes, valueLengthBytes...)
+	finalBytes = append(finalBytes, timestampBytes...)
 	finalBytes = append(finalBytes, keyBytes...)
 	finalBytes = append(finalBytes, valueBytes...)
-	finalBytes = append(finalBytes, timestampBytes...)
+
 	return finalBytes
 }
 
@@ -51,10 +52,9 @@ func (e *Ende) DecodeData(data []byte) (int64, interface{}, interface{}) {
 
 	keyLength := binary.BigEndian.Uint32(data[1:5])
 	valueLength := binary.BigEndian.Uint32(data[5:9])
-
-	key := data[9 : 9+keyLength]
-	value := data[9+keyLength : 9+keyLength+valueLength]
-	timestamp := binary.BigEndian.Uint64(data[9+keyLength+valueLength : 17+keyLength+valueLength])
+	timestamp := binary.BigEndian.Uint64(data[9:17])
+	key := data[17 : 17+keyLength]
+	value := data[17+keyLength : 17+keyLength+valueLength]
 
 	var keyInterface interface{}
 	var valueInterface interface{}
