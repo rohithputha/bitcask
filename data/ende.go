@@ -32,12 +32,11 @@ func (e *Ende) EncodeData(timestamp int64, key interface{}, value interface{}) [
 		return nil
 	}
 
-	finalBytes := append([]byte{s}, keyLengthBytes...)
-	finalBytes = append(finalBytes, valueLengthBytes...)
+	finalBytes := append(keyLengthBytes, valueLengthBytes...)
 	finalBytes = append(finalBytes, timestampBytes...)
 	finalBytes = append(finalBytes, keyBytes...)
 	finalBytes = append(finalBytes, valueBytes...)
-
+	finalBytes = append(finalBytes, s)
 	return finalBytes
 }
 
@@ -45,16 +44,16 @@ func (e *Ende) DecodeData(data []byte) (int64, interface{}, interface{}) {
 	if data == nil || len(data) <= 0 {
 		return -1, nil, nil
 	}
-	if data[0] != byte('\r') {
-		log.Fatalf("Does not start with required start character")
+	if data[len(data)-1] != byte('\r') {
+		log.Fatalf("Does not end with required end character")
 		return -1, nil, nil
 	}
 
-	keyLength := binary.BigEndian.Uint32(data[1:5])
-	valueLength := binary.BigEndian.Uint32(data[5:9])
-	timestamp := binary.BigEndian.Uint64(data[9:17])
-	key := data[17 : 17+keyLength]
-	value := data[17+keyLength : 17+keyLength+valueLength]
+	keyLength := binary.BigEndian.Uint32(data[0:4])
+	valueLength := binary.BigEndian.Uint32(data[4:8])
+	timestamp := binary.BigEndian.Uint64(data[8:16])
+	key := data[16 : 16+keyLength]
+	value := data[16+keyLength : 16+keyLength+valueLength]
 
 	var keyInterface interface{}
 	var valueInterface interface{}

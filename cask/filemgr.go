@@ -1,11 +1,11 @@
 package cask
 
 import (
-	"bitcask/data"
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"log"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -395,45 +395,25 @@ func (file *DbFile) iterator() <-chan fileOpResult {
 	fileOpResultChan := make(chan fileOpResult)
 	go func() {
 		defer close(fileOpResultChan)
-		stat, err := file.file.Stat()
+		offset, err := file.file.Seek(0, io.SeekStart)
 		if err != nil {
-			fileOpResultChan <- fileOpResult{Err: err}
 			return
 		}
-		offset := int64(0)
-		for offset < stat.Size() {
-
+		reader := bufio.NewReader(file.file)
+		size := file.getSize()
+		fmt.Println("file size for iteration : ", size)
+		for {
+			block, err := reader.ReadBytes(byte('\r'))
 			if err != nil {
-				log.Fatalf("Error getting file info: %v", err)
-			}
-			fileSize := stat.Size()
-
-			totalBytes := make([]byte, 0)
-			bytesRead := int64(0)
-			found := false
-			for !found {
-				if offset+bytesRead >= fileSize {
-					found = true
-					continue
+				if err == io.EOF {
+					fmt.Println("EOF")
+					break
 				}
-				buffSize := int(math.Min(float64(10), float64(fileSize-offset+bytesRead)))
-				blockBytes := make([]byte, buffSize)
-				_, err = file.file.ReadAt(blockBytes, offset+bytesRead)
-				for i, b := range blockBytes {
-					bytesRead += 1
-					if b == '\r' && i > 0 {
-						found = true
-						break
-					}
-					blockBytes = blockBytes[:i]
-				}
-				totalBytes = append(totalBytes, blockBytes...)
+				fileOpResultChan <- fileOpResult{Err: err}
+				return
 			}
-			d := data.NewEnde()
-			_, key, val := d.DecodeData(totalBytes)
-			fmt.Println("iterator >>>> ", key, " : ", val)
-			fileOpResultChan <- fileOpResult{BlockBytes: totalBytes, Offset: offset}
-			offset += bytesRead
+			fileOpResultChan <- fileOpResult{BlockBytes: block, Offset: offset}
+			offset += int64(len(block))
 		}
 	}()
 	return fileOpResultChan

@@ -3,6 +3,7 @@ package cask
 import (
 	"encoding/json"
 	"log"
+	"reflect"
 	"sync"
 
 	"bitcask/data"
@@ -50,7 +51,11 @@ func initKeyDir(done <-chan interface{}) {
 		keyDirChangeOps(done)
 	})
 }
+
 func getByteString(key interface{}) string {
+	if reflect.TypeOf(key).Kind() == reflect.String {
+		return key.(string)
+	}
 	b, err := json.Marshal(key)
 	if err != nil {
 		log.Fatalf("Error marshalling key: %v", err)
@@ -68,9 +73,11 @@ func initPresentKeyValues() {
 				log.Fatalf("Error reading block from file %s", file.id)
 			}
 			timestamp, key, _ := ende.DecodeData(opRes.BlockBytes)
+
 			if timestamp == -1 {
 				continue
 			}
+
 			stringKey := getByteString(key)
 
 			if v, ok := keyDir[stringKey]; ok {
@@ -101,6 +108,7 @@ func keyDirChangeOps(done <-chan interface{}) {
 		}
 	}()
 }
+
 func getBlockFromMem(key interface{}) <-chan BlockAddr {
 	blockChan := make(chan BlockAddr)
 	go func() {
@@ -109,10 +117,6 @@ func getBlockFromMem(key interface{}) <-chan BlockAddr {
 	}()
 	return blockChan
 }
-
-//func addBlock(key string, block BlockAddr) {
-//	keyDirChangeOpChannel <- keyDirChangeOp{op: "add", key: key, block: &block}
-//}
 
 func putBlockOnMem(blockAddrChan <-chan KeyBlockAddr) <-chan interface{} {
 	putDone := make(chan interface{})
